@@ -37,17 +37,6 @@ class MCPClient:
         result = json.loads(line)
         return result
 
-    async def tools_list(self) -> list:
-        await self.ensure_running()
-        self.req_id += 1
-        req = {"jsonrpc": "2.0", "id": self.req_id, "method": "tools/list", "params": {}}
-        async with self._lock:
-            self.proc.stdin.write((json.dumps(req) + "\n").encode())
-            await self.proc.stdin.drain()
-            line = await asyncio.wait_for(self.proc.stdout.readline(), timeout=10)
-        result = json.loads(line)
-        return result.get("result", {}).get("tools", [])
-
     async def close(self):
         if self.proc and self.proc.returncode is None:
             self.proc.terminate()
@@ -97,7 +86,6 @@ class MCPManager:
             return
         self._clients["sequential-thinking"] = SequentialThinkingMCP()
         await self._clients["sequential-thinking"].ensure_running()
-        # Sci-Hub MCP
         scihub_cmd = ["python3", os.path.join(
             os.path.dirname(os.path.dirname(__file__)), "mcp", "scihub_server.py"
         )]

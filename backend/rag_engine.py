@@ -53,10 +53,9 @@ class RAGEngine:
 
     async def add_documents(self, docs: list):
         for doc in docs:
-            if isinstance(doc, str):
-                await self.add_document(doc)
-            else:
-                await self.add_document(doc.get("text", ""), doc.get("metadata"))
+            text = doc if isinstance(doc, str) else doc.get("text", "")
+            meta = None if isinstance(doc, str) else doc.get("metadata")
+            await self.add_document(text, meta)
 
     async def search(self, query: str, top_k: int = 5) -> list:
         tbl = self.table
@@ -75,7 +74,8 @@ class RAGEngine:
                 }
                 for r in results
             ]
-        except Exception:
+        except Exception as e:
+            print(f"  RAG search error: {e}")
             return []
 
     async def count(self) -> int:
@@ -87,8 +87,8 @@ class RAGEngine:
     async def clear(self):
         try:
             self.db.drop_table("knowledge")
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  RAG clear: {e}")
         self._table = None
 
 
