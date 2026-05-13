@@ -4,7 +4,7 @@
 import os, sys, time, subprocess, argparse, signal, webbrowser
 
 DEFAULT_USER = "michele-finocchiaro"
-BACKEND_PORT = 8000
+DEFAULT_PORT = 8000
 FRONTEND_PORT = 5173
 REMOTE_DIR = "/home/michele-finocchiaro/SMOT-KNOWLEDGE"
 
@@ -40,10 +40,16 @@ def verify_ssh(host):
     ok(f"SSH: {host} — tunnel via cavo Cat 7")
     return True
 
-def remote_check(host, port=None):
-    p = port or BACKEND_PORT
+def find_port(host):
+    for p in range(8000, 8010):
+        rc, _, _ = ssh(host, f"ss -tlnp | grep -q \":{p} \"", timeout=5)
+        if rc != 0:
+            return p
+    return None
+
+def remote_check(host, port):
     st = {"backend": False, "frontend": False}
-    rc, out, _ = ssh(host, f"curl -sf http://localhost:{p}/api/health && echo OK")
+    rc, out, _ = ssh(host, f"curl -sf http://localhost:{port}/api/health && echo OK")
     st["backend"] = rc == 0 and "OK" in out
     rc, out, _ = ssh(host, "ps aux | grep vite | grep -v grep | head -1")
     st["frontend"] = rc == 0 and bool(out)
@@ -52,67 +58,46 @@ def remote_check(host, port=None):
 def install_deps(host):
     info("Installazione dipendenze backend...")
     rc, out, _ = ssh(host, f"cd {REMOTE_DIR}/backend && pip3 install --break-system-packages -r requirements.txt -q", timeout=90)
-    if rc == 0:
-        ok("Dipendenze backend installate")
-        return True
-    fail(f"Installazione fallita:\n{out[:200]}")
-    return False
+    ok("Dipendenze installate") if rc == 0 else fail(out[:200])
+    return rc == 0
 
-def find_free_port(host):
-    rc, out, _ = ssh(host, "python3 -c 'import socket; s=socket.socket(); s.bind((\"\", 0)); print(s.getsockname()[1]); s.close()'", timeout=5)
-    if rc == 0 and out.strip().isdigit():
-        return int(out.strip())
-    return None
-
-def start_backend(host):
-    global BACKEND_PORT
-    free_port = find_free_port(host)
-    if not free_port:
-        warn("Trova porta libera...")
-        for p in range(8000, 8010):
-            rc, _, _ = ssh(host, f"ss -tlnp | grep -q \":{p} \"", timeout=3)
-            if rc != 0:
-                free_port = p
-                break
-    if not free_port:
-        warn("Nessuna porta libera trovata, uso default 8000")
-        free_port = 8000
-    BACKEND_PORT = free_port
-    info(f"Porta: {BACKEND_PORT}")
-    ssh(host, f"cd {REMOTE_DIR}/backend && nohup python3 -m uvicorn main:app --host 0.0.0.0 --port {BACKEND_PORT} > /tmp/smot-backend.log 2>&1 < /dev/null &", timeout=10)
-    for i in range(8):
+def start_backend(host, port):
+    info(f"Avvio backend su porta {port}...")
+    ssh(host, f"cd {REMOTE_DIR}/backend && nohup python3 -m uvicorn main:app --host 0.0.0.0 --port {port} > /tmp/smot-backend.log 2>&1 < /dev/null &", timeout=10)
+    for _ in range(8):
         time.sleep(2)
-        if remote_check(host)["backend"]:
-            ok(f"Backend avviato (porta {BACKEND_PORT})")
+        if remote_check(host, port)["backend"]:
+            ok("Backend avviato")
             return True
     rc, out, _ = ssh(host, "tail -30 /tmp/smot-backend.log")
-    fail(f"Backend non parte — log:\n{out}")
+    fail(f"Backend non parte:\n{out}")
     return False
 
 def start_frontend(host):
     info("Avvio frontend...")
     ssh(host, f"cd {REMOTE_DIR}/frontend && nohup npm run dev > /tmp/smot-frontend.log 2>&1 < /dev/null &", timeout=10)
-    for i in range(8):
+    for _ in range(8):
         time.sleep(2)
-        if remote_check(host)["frontend"]:
+        if remote_check(host, DEFAULT_PORT)["frontend"]:
             ok("Frontend avviato")
             return True
     rc, out, _ = ssh(host, "tail -30 /tmp/smot-frontend.log")
-    fail(f"Frontend non parte — log:\n{out}")
+    fail(f"Frontend non parte:\n{out}")
     return False
 
-def start_tunnel(host):
+def start_tunnel(host, port):
     info("Port forwarding SSH...")
     cmd = ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
            "-o", "ServerAliveInterval=30",
-           "-L", f"{BACKEND_PORT}:localhost:{BACKEND_PORT}",
+           "-L", f"{port}:localhost:{port}",
            "-L", f"{FRONTEND_PORT}:localhost:{FRONTEND_PORT}",
            "-N", f"{DEFAULT_USER}@{host}"]
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(2)
         if proc.poll() is None:
-            ok(f"Tunnel: localhost:{BACKEND_PORT}  ↔  {host}:{BACKEND_PORT}")
+            ok(f"Tunnel: localhost:{port} ↔ {host}:{port}")
+            ok(f"        localhost:{FRONTEND_PORT} ↔ {host}:{FRONTEND_PORT}")
             return proc
         fail(f"Tunnel fallito (exit {proc.returncode})")
         return None
@@ -123,10 +108,8 @@ def start_tunnel(host):
 def stop_tunnel(proc):
     if proc and proc.poll() is None:
         proc.terminate()
-        try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        try: proc.wait(timeout=3)
+        except subprocess.TimeoutExpired: proc.kill()
 
 def open_browser():
     url = f"http://localhost:{FRONTEND_PORT}"
@@ -138,7 +121,7 @@ def open_browser():
         warn("Apri: " + url)
 
 def main():
-    global DEFAULT_USER, BACKEND_PORT
+    global DEFAULT_USER
     p = argparse.ArgumentParser(description="SMOT-KNOWLEDGE — Remote Launcher")
     p.add_argument("--host", help="IP server Linux (es. 10.0.0.2)")
     p.add_argument("--local", action="store_true")
@@ -154,43 +137,47 @@ def main():
         sys.exit(1)
     print()
 
-    if args.local:
-        info("Modalità locale — avvia backend e frontend manualmente")
-        return
+    st = remote_check(args.host, DEFAULT_PORT)
+    already_on = DEFAULT_PORT if st["backend"] else None
+    if not st["backend"]:
+        for p in range(8000, 8010):
+            rc, out, _ = ssh(args.host, f"curl -sf http://localhost:{p}/api/health && echo OK")
+            if rc == 0 and "OK" in out:
+                already_on = p
+                break
 
-    st = remote_check(args.host)
-    for k, v in st.items():
-        (ok if v else warn)(f"{k}: {'attivo' if v else 'non attivo'}")
+    be_port = already_on or find_port(args.host) or DEFAULT_PORT
+
+    if already_on:
+        ok(f"backend: attivo (porta {be_port})")
+    else:
+        warn("backend: non attivo")
+        rc, out, _ = ssh(args.host, "python3 -c 'import fastapi, uvicorn, httpx, lancedb' 2>&1")
+        if rc != 0:
+            install_deps(args.host)
+        start_backend(args.host, be_port)
+
+    if st["frontend"]:
+        ok("frontend: attivo")
+    else:
+        warn("frontend: non attivo")
+        start_frontend(args.host)
+
     if args.status:
         return
 
-    need_deps = False
-    if not st["backend"]:
-        rc, out, _ = ssh(args.host, "python3 -c 'import fastapi, uvicorn, httpx, lancedb' 2>&1")
-        if rc != 0:
-            need_deps = True
-
-    if need_deps:
-        if not install_deps(args.host):
-            sys.exit(1)
-
-    if not st["backend"]:
-        start_backend(args.host)
-    if not st["frontend"]:
-        start_frontend(args.host)
-
-    st2 = remote_check(args.host, BACKEND_PORT)
-    if not st2["backend"]:
+    if not remote_check(args.host, be_port)["backend"]:
         fail("Backend non partito")
         sys.exit(1)
 
-    tunnel = start_tunnel(args.host)
+    tunnel = start_tunnel(args.host, be_port)
     if not tunnel:
         sys.exit(1)
 
     open_browser()
     print(f"\n  {C.BOLD}⚡ SMOT-KNOWLEDGE attivo{C.RESET}")
     print(f"  {C.DIM}Chat:   {C.CYAN}http://localhost:{FRONTEND_PORT}{C.RESET}")
+    print(f"  {C.DIM}Backend: porta {be_port}{C.RESET}")
     print(f"  {C.DIM}Premi Ctrl+C per fermare{C.RESET}\n")
     try:
         while True:
