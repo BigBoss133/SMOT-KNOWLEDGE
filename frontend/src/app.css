@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { scrollbar-width: thin; scrollbar-color: #2a2a42 transparent; }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #2a2a42; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #3a3a5c; }
+
+  body { margin: 0; font-family: 'Inter', sans-serif; }
+}
+
+@layer utilities {
+  .bg-grid {
+    background-image: linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+}
+
+.terminal-line {
+  animation: slide-up 0.15s ease-out;
+}
+
+.message-enter {
+  animation: slide-up 0.3s ease-out;
+}
+
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.animate-spin-slow { animation: spin-slow 3s linear infinite; }
+
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.cursor-blink { animation: cursor-blink 1s step-end infinite; }
