@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SMOT-KNOWLEDGE — Remote Launcher per Mac via tunnel SSH Cat 7."""
 
-import os, sys, time, json, signal, socket, subprocess, argparse, urllib.request, webbrowser
+import os, sys, time, json, signal, subprocess, argparse, urllib.request, webbrowser
 
 DEFAULT_USER = "michele-finocchiaro"
 BACKEND_PORT = 8000
@@ -18,12 +18,12 @@ def ok(msg):    print(f"  {C.GREEN}✓{C.RESET} {msg}")
 def warn(msg):  print(f"  {C.YELLOW}⚠{C.RESET} {msg}")
 def fail(msg):  print(f"  {C.RED}✗{C.RESET} {msg}")
 
-def ssh(host, *args, timeout=15):
-    cmd = ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
-           "-o", "BatchMode=yes", f"{DEFAULT_USER}@{host}"]
-    cmd.extend(args)
+def ssh(host, cmd, timeout=15):
+    """Esegue un comando SSH. cmd è una stringa unica (non lista)."""
+    c = ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+         "-o", "BatchMode=yes", f"{DEFAULT_USER}@{host}", cmd]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(c, capture_output=True, text=True, timeout=timeout)
         return r.returncode, r.stdout.strip(), r.stderr.strip()
     except subprocess.TimeoutExpired:
         return -1, "", "timeout"
@@ -32,7 +32,7 @@ def ssh(host, *args, timeout=15):
 
 def verify_ssh(host):
     print(f"\n  Verifica tunnel SSH verso {host}...", end=" ", flush=True)
-    rc, out, err = ssh(host, "echo", "pong")
+    rc, out, err = ssh(host, "echo pong")
     if rc != 0:
         print(f"{C.RED}✗{C.RESET}")
         fail(f"SSH: {host} — {err}")
@@ -43,55 +43,41 @@ def verify_ssh(host):
 
 def remote_check(host):
     st = {"backend": False, "frontend": False}
-
-    rc, out, _ = ssh(host, "sh", "-c",
-        f"curl -sf http://localhost:{BACKEND_PORT}/api/health && echo OK", timeout=8)
-    if rc == 0:
+    rc, out, _ = ssh(host, f"curl -sf http://localhost:{BACKEND_PORT}/api/health && echo OK")
+    if rc == 0 and "OK" in out:
         st["backend"] = True
-
-    rc, out, _ = ssh(host, "sh", "-c",
-        "ps aux | grep vite | grep -v grep | head -1", timeout=5)
+    rc, out, _ = ssh(host, "ps aux | grep vite | grep -v grep | head -1")
     if rc == 0 and out:
         st["frontend"] = True
-
     return st
 
 def start_backend(host):
     info("Avvio backend...")
-    ssh(host, "sh", "-c",
-        f"cd {REMOTE_DIR}/backend && "
-        f"nohup uvicorn main:app --host 0.0.0.0 --port {BACKEND_PORT} "
-        f"> /tmp/smot-backend.log 2>&1 < /dev/null &", timeout=10)
-    for i in range(6):
+    cmd = f"cd {REMOTE_DIR}/backend && nohup python3 -m uvicorn main:app --host 0.0.0.0 --port {BACKEND_PORT} > /tmp/smot-backend.log 2>&1 < /dev/null &"
+    ssh(host, cmd, timeout=10)
+    for i in range(8):
         time.sleep(2)
         st = remote_check(host)
         if st["backend"]:
             ok("Backend avviato")
             return True
-    rc, out, _ = ssh(host, "cat", "/tmp/smot-backend.log")
-    fail(f"Backend non parte — log:\n{out[:300] if out else '(vuoto)'}")
+    rc, out, _ = ssh(host, "tail -20 /tmp/smot-backend.log")
+    fail(f"Backend non parte — ultime righe log:\n{out[:400]}")
     return False
 
 def start_frontend(host):
     info("Avvio frontend...")
-    ssh(host, "sh", "-c",
-        f"cd {REMOTE_DIR}/frontend && "
-        f"nohup npm run dev "
-        f"> /tmp/smot-frontend.log 2>&1 < /dev/null &", timeout=10)
-    for i in range(6):
+    cmd = f"cd {REMOTE_DIR}/frontend && nohup npm run dev > /tmp/smot-frontend.log 2>&1 < /dev/null &"
+    ssh(host, cmd, timeout=10)
+    for i in range(8):
         time.sleep(2)
         st = remote_check(host)
         if st["frontend"]:
             ok("Frontend avviato")
             return True
-    rc, out, _ = ssh(host, "cat", "/tmp/smot-frontend.log")
-    fail(f"Frontend non parte — log:\n{out[:300] if out else '(vuoto)'}")
+    rc, out, _ = ssh(host, "tail -20 /tmp/smot-frontend.log")
+    fail(f"Frontend non parte — ultime righe log:\n{out[:400]}")
     return False
-
-def start_services(host):
-    be = start_backend(host)
-    fe = start_frontend(host)
-    return be or fe
 
 def start_tunnel(host):
     info("Port forwarding SSH...")
@@ -107,10 +93,10 @@ def start_tunnel(host):
             ok(f"Tunnel: localhost:{BACKEND_PORT}  ↔  {host}:{BACKEND_PORT}")
             ok(f"        localhost:{FRONTEND_PORT}  ↔  {host}:{FRONTEND_PORT}")
             return proc
-        fail(f"Tunnel SSH fallito (exit {proc.returncode})")
+        fail(f"Tunnel fallito (exit {proc.returncode})")
         return None
     except FileNotFoundError:
-        fail("ssh non trovato — installalo con 'brew install openssh'")
+        fail("ssh non trovato — 'brew install openssh'")
         return None
 
 def stop_tunnel(proc):
@@ -130,41 +116,13 @@ def open_browser():
     except Exception:
         warn("Apri manualmente: " + url)
 
-def run_local():
-    def _get(url):
-        try:
-            r = urllib.request.urlopen(url, timeout=3)
-            return r.status == 200, r.read().decode()
-        except Exception:
-            return False, ""
-    ok("Modalità locale")
-    be_ok, _ = _get(f"http://localhost:{BACKEND_PORT}/api/health")
-    if not be_ok:
-        info("Avvio backend...")
-        subprocess.Popen(["uvicorn", "main:app", "--host", "0.0.0.0", "--port", str(BACKEND_PORT)],
-            cwd=os.path.join(os.path.dirname(__file__), "backend"),
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(4)
-    info("Avvio frontend...")
-    subprocess.Popen(["npm", "run", "dev"],
-        cwd=os.path.join(os.path.dirname(__file__), "frontend"),
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(3)
-    open_browser()
-    print(f"\n  {C.DIM}Premi Ctrl+C per fermare{C.RESET}")
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print()
-
 def main():
     global DEFAULT_USER
     p = argparse.ArgumentParser(description="SMOT-KNOWLEDGE — Remote Launcher",
         epilog="""Esempi:
   python3 smot.py --host 10.0.0.2         ← tunnel Cat 7
   python3 smot.py --host 10.0.0.2 --status
-  python3 smot.py --local                 ← tutto in locale""")
+  python3 smot.py --local                 ← sviluppo locale""")
     p.add_argument("--host", help="IP del server Linux")
     p.add_argument("--local", action="store_true")
     p.add_argument("--status", action="store_true")
@@ -179,22 +137,20 @@ def main():
         if not verify_ssh(args.host):
             sys.exit(1)
         print()
-    if args.local:
-        run_local()
-        return
     st = remote_check(args.host)
     for k, v in st.items():
-        mark = ok if v else warn
-        mark(f"{k}: {'attivo' if v else 'non attivo'}")
+        (ok if v else warn)(f"{k}: {'attivo' if v else 'non attivo'}")
     if args.status:
         return
     if not (st["backend"] and st["frontend"]):
-        if not start_services(args.host):
-            fail("Impossibile avviare i servizi. Controlla i log sul server.")
-            sys.exit(1)
+        start_backend(args.host)
+        start_frontend(args.host)
+    st = remote_check(args.host)
+    if not st["backend"] or not st["frontend"]:
+        fail("Servizi non partiti. Controlla i log sul server.")
+        sys.exit(1)
     tunnel = start_tunnel(args.host)
     if not tunnel:
-        fail("Tunnel SSH non riuscito")
         sys.exit(1)
     open_browser()
     print(f"\n  {C.BOLD}⚡ SMOT-KNOWLEDGE attivo{C.RESET}")
