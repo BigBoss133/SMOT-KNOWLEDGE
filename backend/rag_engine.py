@@ -38,7 +38,6 @@ class RAGEngine:
         emb = await self.embed(text[:2000])
         if not emb or len(emb) == 0:
             return
-        import pyarrow as pa
         vec = np.array([emb], dtype=np.float32)
         tbl = self.table
         record = {

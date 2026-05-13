@@ -81,7 +81,7 @@ async def ollama_gen(prompt: str):
                         full += chunk["response"]
                     if chunk.get("done"):
                         return full
-            return full
+            return full if full else ""
 
 async def coast_pipeline(query: str):
     start = time.time()
