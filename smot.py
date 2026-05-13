@@ -40,9 +40,10 @@ def verify_ssh(host):
     ok(f"SSH: {host} — tunnel via cavo Cat 7")
     return True
 
-def remote_check(host):
+def remote_check(host, port=None):
+    p = port or BACKEND_PORT
     st = {"backend": False, "frontend": False}
-    rc, out, _ = ssh(host, f"curl -sf http://localhost:{BACKEND_PORT}/api/health && echo OK")
+    rc, out, _ = ssh(host, f"curl -sf http://localhost:{p}/api/health && echo OK")
     st["backend"] = rc == 0 and "OK" in out
     rc, out, _ = ssh(host, "ps aux | grep vite | grep -v grep | head -1")
     st["frontend"] = rc == 0 and bool(out)
@@ -57,15 +58,32 @@ def install_deps(host):
     fail(f"Installazione fallita:\n{out[:200]}")
     return False
 
+def find_free_port(host):
+    rc, out, _ = ssh(host, "python3 -c 'import socket; s=socket.socket(); s.bind((\"\", 0)); print(s.getsockname()[1]); s.close()'", timeout=5)
+    if rc == 0 and out.strip().isdigit():
+        return int(out.strip())
+    return None
+
 def start_backend(host):
-    info("Avvio backend...")
-    # Libera la porta se occupata da un processo precedente
-    ssh(host, f"kill $(lsof -ti:{BACKEND_PORT}) 2>/dev/null; sleep 1", timeout=5)
+    global BACKEND_PORT
+    free_port = find_free_port(host)
+    if not free_port:
+        warn("Trova porta libera...")
+        for p in range(8000, 8010):
+            rc, _, _ = ssh(host, f"ss -tlnp | grep -q \":{p} \"", timeout=3)
+            if rc != 0:
+                free_port = p
+                break
+    if not free_port:
+        warn("Nessuna porta libera trovata, uso default 8000")
+        free_port = 8000
+    BACKEND_PORT = free_port
+    info(f"Porta: {BACKEND_PORT}")
     ssh(host, f"cd {REMOTE_DIR}/backend && nohup python3 -m uvicorn main:app --host 0.0.0.0 --port {BACKEND_PORT} > /tmp/smot-backend.log 2>&1 < /dev/null &", timeout=10)
     for i in range(8):
         time.sleep(2)
         if remote_check(host)["backend"]:
-            ok("Backend avviato")
+            ok(f"Backend avviato (porta {BACKEND_PORT})")
             return True
     rc, out, _ = ssh(host, "tail -30 /tmp/smot-backend.log")
     fail(f"Backend non parte — log:\n{out}")
@@ -120,7 +138,7 @@ def open_browser():
         warn("Apri: " + url)
 
 def main():
-    global DEFAULT_USER
+    global DEFAULT_USER, BACKEND_PORT
     p = argparse.ArgumentParser(description="SMOT-KNOWLEDGE — Remote Launcher")
     p.add_argument("--host", help="IP server Linux (es. 10.0.0.2)")
     p.add_argument("--local", action="store_true")
@@ -161,7 +179,7 @@ def main():
     if not st["frontend"]:
         start_frontend(args.host)
 
-    st2 = remote_check(args.host)
+    st2 = remote_check(args.host, BACKEND_PORT)
     if not st2["backend"]:
         fail("Backend non partito")
         sys.exit(1)
