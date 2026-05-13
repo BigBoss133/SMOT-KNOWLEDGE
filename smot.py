@@ -59,6 +59,8 @@ def install_deps(host):
 
 def start_backend(host):
     info("Avvio backend...")
+    # Libera la porta se occupata da un processo precedente
+    ssh(host, f"kill $(lsof -ti:{BACKEND_PORT}) 2>/dev/null; sleep 1", timeout=5)
     ssh(host, f"cd {REMOTE_DIR}/backend && nohup python3 -m uvicorn main:app --host 0.0.0.0 --port {BACKEND_PORT} > /tmp/smot-backend.log 2>&1 < /dev/null &", timeout=10)
     for i in range(8):
         time.sleep(2)
