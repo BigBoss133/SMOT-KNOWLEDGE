@@ -3,45 +3,69 @@
 Sistema RAG personale con cervello simulato e curiosità artificiale.
 Modello locale su GPU — accesso via tunnel SSH dal Mac.
 
-## 1 Comando — Dal Mac
+## Tunnel SSH — Dal Mac al server Linux
 
 ```bash
-# Scarica il launcher
+# Collega le porte (sostituisci 10.0.0.2 con l'IP del server)
+ssh -L 5173:localhost:5173 -L 8001:localhost:8001 michele-finocchiaro@10.0.0.2
+```
+
+Poi apri `http://localhost:5173` nel browser del Mac.
+
+## Launcher automatico
+
+Scarica ed esegui — fa tutto da solo (SSH tunnel + avvio servizi + browser):
+
+```bash
 curl -L -H "Accept: application/vnd.github.raw" \
   "https://api.github.com/repos/BigBoss133/SMOT-KNOWLEDGE/contents/smot.py" \
   -o smot.py
 
-# Avvia — sostituisci con l'IP del server Linux
 python3 smot.py --host 10.0.0.2
 ```
 
-Il launcher fa tutto automaticamente:
+Il launcher verifica la connessione, avvia backend/frontend se necessario,
+crea il tunnel SSH e apre il browser. Output tipico:
 
 ```
-  ✓ SSH: 10.0.0.2 — tunnel via cavo Cat 7
-  ✓ Backend: gemma3:4b — 5 documenti in KB
+  ✓ SSH: 10.0.0.2
+  ✓ Backend: gemma3:4b
   ✓ Frontend: attivo
   ✓ Tunnel: localhost:8001 ↔ server:8001
   ✓ Browser aperto su http://localhost:5173
-
-  ⚡ SMOT-KNOWLEDGE attivo
-  Chat:   http://localhost:5173
-  Backend: porta 8001
 ```
 
-Se la porta 8000 è già occupata, usa automaticamente la prima libera (8001, 8002, ...).
+La porta del backend è dinamica — se 8000 è occupata usa 8001, 8002, ecc.
 
-### Altri comandi
+### Comandi utili
 
 ```bash
-# Solo verifica stato
+# Solo verifica stato remoto
 python3 smot.py --host 10.0.0.2 --status
 
 # Sviluppo locale (senza SSH)
 python3 smot.py --local
 
-# Utente SSH personalizzato
+# Utente SSH diverso
 python3 smot.py --host 10.0.0.2 --user michele-finocchiaro
+```
+
+### Se la UI mostra "Backend non connesso"
+
+```bash
+# 1. Verifica che il backend sia raggiungibile via tunnel
+curl -sf http://localhost:8001/api/health
+# Se risponde → il tunnel funziona
+
+# 2. Se non risponde, riavvia i servizi sul server:
+ssh michele-finocchiaro@10.0.0.2 "
+  cd /home/michele-finocchiaro/SMOT-KNOWLEDGE/backend
+  nohup python3 -m uvicorn main:app --host 0.0.0.0 --port 8001 > /tmp/smot-be.log 2>&1 &
+  cd /home/michele-finocchiaro/SMOT-KNOWLEDGE/frontend
+  SMOT_BACKEND_PORT=8001 nohup npm run dev > /tmp/smot-fe.log 2>&1 &
+"
+
+# 3. Tunnel SSH e ricarica http://localhost:5173
 ```
 
 ## Architettura
