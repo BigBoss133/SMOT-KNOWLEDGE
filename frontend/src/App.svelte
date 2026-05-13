@@ -1,5 +1,5 @@
 <script>
-  import { view, isThinking, terminalLogs, settings, brainStats } from './lib/stores/app.js'
+  import { view, isThinking, settings, brainStats } from './lib/stores/app.js'
   import Chat from './lib/components/Chat.svelte'
   import BrainView from './lib/components/BrainView.svelte'
   import SourcesPanel from './lib/components/SourcesPanel.svelte'
@@ -7,20 +7,39 @@
   import TerminalPanel from './lib/components/TerminalPanel.svelte'
 
   let showTerminal = $state(false)
+  let clock = $state(new Date().toLocaleTimeString())
 
   function toggleTerminal() {
     showTerminal = !showTerminal
   }
+
+  function fetchStats() {
+    fetch('http://localhost:8000/api/stats')
+      .then(r => r.json())
+      .then(d => brainStats.set(d))
+      .catch(() => {})
+  }
+
+  $effect(() => {
+    const timer = setInterval(() => {
+      clock = new Date().toLocaleTimeString()
+    }, 1000)
+    fetchStats()
+    const statsTimer = setInterval(fetchStats, 10000)
+    return () => { clearInterval(timer); clearInterval(statsTimer) }
+  })
 </script>
 
 <div class="h-screen flex flex-col bg-brain-900 bg-grid overflow-hidden">
-  <!-- Header -->
   <header class="flex items-center justify-between px-5 py-3 border-b border-brain-700/50 shrink-0">
     <div class="flex items-center gap-3">
       <span class="text-xl">⚡</span>
-      <h1 class="text-sm font-semibold tracking-wide text-brain-100">
-        SMOT-KNOWLEDGE
-      </h1>
+      <h1 class="text-sm font-semibold tracking-wide text-brain-100">SMOT-KNOWLEDGE</h1>
+      <span class="flex items-center gap-1.5 text-[11px] text-brain-500">
+        <span class="w-1.5 h-1.5 rounded-full {$settings.wsConnected ? 'bg-accent-emerald' : 'bg-red-400'}"
+              class:animate-pulse-glow={!$settings.wsConnected}></span>
+        {$settings.wsConnected ? 'connesso' : 'offline'}
+      </span>
       {#if $isThinking}
         <span class="flex items-center gap-1.5 text-xs text-accent-cyan">
           <span class="w-1.5 h-1.5 rounded-full bg-accent-cyan animate-pulse-glow"></span>
@@ -28,15 +47,17 @@
         </span>
       {/if}
     </div>
-    <button
-      onclick={toggleTerminal}
-      class="text-xs text-brain-400 hover:text-brain-200 transition-colors px-2 py-1 rounded hover:bg-brain-700/50"
-    >
-      {showTerminal ? '⊟ Terminale' : '⊞ Terminale'}
-    </button>
+    <div class="flex items-center gap-3">
+      <span class="text-[10px] text-brain-500 font-mono">{clock}</span>
+      <button
+        onclick={toggleTerminal}
+        class="text-xs text-brain-400 hover:text-brain-200 transition-colors px-2 py-1 rounded hover:bg-brain-700/50"
+      >
+        {showTerminal ? '⊟ Terminale' : '⊞ Terminale'}
+      </button>
+    </div>
   </header>
 
-  <!-- Main content -->
   <main class="flex-1 overflow-hidden relative">
     {#if $view === 'chat'}
       <Chat />
@@ -49,16 +70,10 @@
     {/if}
   </main>
 
-  <!-- Terminal panel (collapsible) -->
-  {#if showTerminal || $settings.terminalVisible}
-    <div class="transition-all duration-300 ease-in-out" class:max-h-48={showTerminal} class:max-h-0={!showTerminal}>
-      {#if showTerminal}
-        <TerminalPanel />
-      {/if}
-    </div>
+  {#if showTerminal}
+    <TerminalPanel />
   {/if}
 
-  <!-- Bottom navigation -->
   <nav class="flex items-center justify-around px-4 py-2 border-t border-brain-700/50 bg-brain-800/50 shrink-0">
     {#each [
       { id: 'chat', icon: '💬', label: 'Chat' },
