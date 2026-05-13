@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-SMOT-KNOWLEDGE — Remote Launcher per Mac Mini M4
+SMOT-KNOWLEDGE — Remote Launcher per Mac
 
-Connettiti al server Linux con GPU, avvia backend/frontend,
-fai port forwarding e apri il browser. Tutto in un comando.
+Connessione SSH via cavo Cat 7 al server Linux con GPU.
+Avvio automatico backend/frontend, port forwarding, browser.
+Un solo modello, un solo comando.
 
 Uso:
-  python3 smot.py                        # connessione SSH automatica
-  python3 smot.py --host 192.168.1.100   # IP specifico
-  python3 smot.py --local                # tutto in locale (senza SSH)
-  python3 smot.py --status               # verifica stato remoto
+  python3 smot.py --host 192.168.1.100
+  python3 smot.py --host 192.168.1.100 --status
+  python3 smot.py --local
 """
 
 import os
@@ -22,20 +22,15 @@ import subprocess
 import argparse
 import urllib.request
 import webbrowser
-from pathlib import Path
 
+# ─── Default ──────────────────────────────────────────────────
 
-# ─── Configurabile ─────────────────────────────────────────────
-
-DEFAULT_HOST = ""            # lascia vuoto per auto-detect
 DEFAULT_USER = "michele-finocchiaro"
-DEFAULT_PORT = 8000
-DEFAULT_FRONTEND_PORT = 5173
+BACKEND_PORT = 8000
+FRONTEND_PORT = 5173
 REMOTE_DIR = "/home/michele-finocchiaro/SMOT-KNOWLEDGE"
-SSH_KEY = ""                 # lascia vuoto per default (~/.ssh/id_*)
 
-
-# ─── Colori ────────────────────────────────────────────────────
+# ─── Colori ANSI ──────────────────────────────────────────────
 
 class C:
     BOLD = "\033[1m"
@@ -47,317 +42,209 @@ class C:
     RESET = "\033[0m"
 
 
-# ─── Utility ───────────────────────────────────────────────────
-
-def banner():
-    print(f"\n{C.BOLD}{C.CYAN}  ⚡ SMOT-KNOWLEDGE — Remote Launcher{C.RESET}")
-    print(f"  {C.DIM}{'─' * 44}{C.RESET}\n")
-
-
-def info(msg):
-    print(f"  {C.CYAN}▶{C.RESET} {msg}")
+def info(msg):  print(f"  {C.CYAN}▶{C.RESET} {msg}")
+def ok(msg):    print(f"  {C.GREEN}✓{C.RESET} {msg}")
+def warn(msg):  print(f"  {C.YELLOW}⚠{C.RESET} {msg}")
+def fail(msg):  print(f"  {C.RED}✗{C.RESET} {msg}")
 
 
-def ok(msg):
-    print(f"  {C.GREEN}✓{C.RESET} {msg}")
+# ─── SSH ──────────────────────────────────────────────────────
 
-
-def warn(msg):
-    print(f"  {C.YELLOW}⚠{C.RESET} {msg}")
-
-
-def fail(msg):
-    print(f"  {C.RED}✗{C.RESET} {msg}")
-
-
-def run(cmd, capture=True, timeout=30, check=True):
-    """Esegue un comando locale e ritorna (returncode, stdout, stderr)."""
+def ssh_run(host, *args, timeout=15):
+    cmd = ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+           f"{DEFAULT_USER}@{host}"]
+    cmd.extend(args)
     try:
-        r = subprocess.run(
-            cmd, capture_output=capture, text=True, timeout=timeout
-        )
-        return r.returncode, r.stdout.strip() if r.stdout else "", r.stderr.strip() if r.stderr else ""
-    except subprocess.TimeoutExpired:
-        return -1, "", "timeout"
-    except FileNotFoundError:
-        return -2, "", "comando non trovato"
-
-
-def ssh_cmd(host, *args):
-    """Costruisce una lista di comandi SSH."""
-    cmd = ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no"]
-    if SSH_KEY:
-        cmd += ["-i", SSH_KEY]
-    cmd += [f"{DEFAULT_USER}@{host}"]
-    cmd += list(args)
-    return cmd
-
-
-def ssh(host, *args, timeout=30):
-    """Esegue un comando SSH e ritorna (rc, stdout, stderr)."""
-    cmd = ssh_cmd(host, *args)
-    try:
-        r = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout
-        )
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         return r.returncode, r.stdout.strip(), r.stderr.strip()
     except subprocess.TimeoutExpired:
-        return -1, "", "SSH timeout"
+        return -1, "", "timeout"
     except FileNotFoundError:
         return -2, "", "ssh non trovato"
 
 
-# ─── Host detection ────────────────────────────────────────────
-
-def find_host():
-    """Cerca automaticamente il server Linux sulla rete locale."""
-    # Prova hostname noti
-    for name in ["linux-desktop", "smot-server", "ubuntu", "localhost"]:
-        try:
-            ip = socket.gethostbyname(name)
-            rc, _, _ = ssh(name, "echo", "pong", timeout=5)
-            if rc == 0:
-                return name
-        except Exception:
-            continue
-    # Scansiona la subnet /24 per host con porta 22 aperta e risposta
-    try:
-        # Prende l'IP locale del Mac
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.connect(("8.8.8.8", 80))
-            local_ip = s.getsockname()[0]
-        subnet = ".".join(local_ip.split(".")[:3])
-        info(f"Scansione {subnet}.0/24 per il server...")
-        for i in range(1, 255):
-            ip = f"{subnet}.{i}"
-            rc, out, _ = ssh(ip, "echo", "pong", timeout=2)
-            if rc == 0 and "pong" in out:
-                return ip
-    except Exception:
-        pass
-    return ""
-
-
-# ─── Status check ──────────────────────────────────────────────
-
-def check_remote(host):
-    """Verifica lo stato del server remoto."""
-    info(f"Connessione a {host}...")
-
-    # Test SSH
-    rc, out, err = ssh(host, "echo", "pong")
+def verify_ssh(host):
+    rc, out, err = ssh_run(host, "echo", "pong")
     if rc != 0:
-        fail(f"SSH non raggiungibile: {err}")
-        return False, {}
-    ok(f"SSH: {host}")
+        fail(f"SSH: {host} non raggiungibile — {err}")
+        return False
+    ok(f"SSH: {host} — tunnel via cavo Cat 7")
+    return True
 
-    # Backend health
+
+# ─── Remote checks ────────────────────────────────────────────
+
+def remote_status(host):
     status = {"host": host, "backend": False, "frontend": False, "ollama": False}
-    rc, out, _ = ssh(host, "curl", "-s", "http://localhost:8000/api/health")
+
+    rc, out, _ = ssh_run(host, "curl", "-s", "http://localhost:8000/api/health", timeout=8)
     if rc == 0 and out:
         try:
-            data = json.loads(out)
+            d = json.loads(out)
             status["backend"] = True
-            status["model"] = data.get("model", "?")
-            status["rag_docs"] = data.get("rag_docs", 0)
-            ok(f"Backend: {data.get('model', '?')} — {data.get('rag_docs', 0)} doc")
-        except json.JSONDecodeError:
+            status["model"] = d.get("model", "?")
+            status["rag_docs"] = d.get("rag_docs", 0)
+            ok(f"Backend: {d['model']} — {d.get('rag_docs', 0)} documenti in KB")
+        except Exception:
             warn("Backend: risposta non valida")
     else:
         warn("Backend: non attivo")
 
-    # Ollama
-    rc, out, _ = ssh(host, "curl", "-s", "http://localhost:11434/api/tags")
+    rc, out, _ = ssh_run(host, "curl", "-s", "http://localhost:11434/api/tags", timeout=8)
     if rc == 0 and out:
         try:
-            models = json.loads(out).get("models", [])
-            status["ollama"] = True
-            status["models"] = [m["name"] for m in models]
-            ok(f"Ollama: {len(models)} modelli — {', '.join(m['name'] for m in models[:3])}")
-        except json.JSONDecodeError:
+            if json.loads(out).get("models"):
+                status["ollama"] = True
+                ok("Ollama: attivo")
+        except Exception:
             warn("Ollama: risposta non valida")
     else:
         warn("Ollama: non attivo")
 
-    # Frontend (check via ps)
-    rc, out, _ = ssh(host, "sh", "-c",
-                     "ps aux | grep 'vite' | grep -v grep | head -1")
+    rc, out, _ = ssh_run(host, "sh", "-c",
+                         "ps aux | grep 'vite' | grep -v grep | head -1", timeout=5)
     if rc == 0 and out:
         status["frontend"] = True
         ok("Frontend: attivo")
     else:
         warn("Frontend: non attivo")
 
-    return True, status
+    return status
 
 
-# ─── Start services ────────────────────────────────────────────
+# ─── Start services ───────────────────────────────────────────
 
 def start_services(host):
-    """Avvia backend e frontend sul server remoto."""
-    info("Avvio servizi...")
-
-    # Backend
-    rc, out, err = ssh(host, "sh", "-c",
-                       f"cd {REMOTE_DIR}/backend && nohup uvicorn main:app "
-                       f"--host 0.0.0.0 --port 8000 > /tmp/smot-backend.log 2>&1 &",
-                       timeout=10)
-    if rc == 0:
-        ok("Backend avviato")
-    else:
-        warn(f"Backend: {err}")
-
-    time.sleep(2)
-
-    # Frontend
-    rc, out, err = ssh(host, "sh", "-c",
-                       f"cd {REMOTE_DIR}/frontend && nohup npm run dev "
-                       f"> /tmp/smot-frontend.log 2>&1 &",
-                       timeout=10)
-    if rc == 0:
-        ok("Frontend avviato")
-    else:
-        warn(f"Frontend: {err}")
-
+    info("Avvio backend...")
+    ssh_run(host, "sh", "-c",
+            f"cd {REMOTE_DIR}/backend && nohup uvicorn main:app "
+            f"--host 0.0.0.0 --port {BACKEND_PORT} > /tmp/smot-backend.log 2>&1 &",
+            timeout=8)
     time.sleep(3)
-    return True
+
+    info("Avvio frontend...")
+    ssh_run(host, "sh", "-c",
+            f"cd {REMOTE_DIR}/frontend && nohup npm run dev "
+            f"> /tmp/smot-frontend.log 2>&1 &",
+            timeout=8)
+    time.sleep(3)
+
+    ok("Servizi avviati")
 
 
-# ─── Port forwarding ───────────────────────────────────────────
+# ─── Port forwarding ──────────────────────────────────────────
 
-SSH_FORWARD_PROC = [None]
+FORWARD_PROC = [None]
 
-
-def start_port_forwarding(host):
-    """Avvia SSH port forwarding in background."""
+def start_tunnel(host):
     info("Port forwarding SSH...")
-
     cmd = [
         "ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
         "-o", "ServerAliveInterval=30",
-        "-L", f"{DEFAULT_FRONTEND_PORT}:localhost:{DEFAULT_FRONTEND_PORT}",
-        "-L", f"{DEFAULT_PORT}:localhost:{DEFAULT_PORT}",
-        "-N",
+        "-L", f"{BACKEND_PORT}:localhost:{BACKEND_PORT}",
+        "-L", f"{FRONTEND_PORT}:localhost:{FRONTEND_PORT}",
+        "-N", f"{DEFAULT_USER}@{host}",
     ]
-    if SSH_KEY:
-        cmd += ["-i", SSH_KEY]
-    cmd.append(f"{DEFAULT_USER}@{host}")
-
     try:
-        proc = subprocess.Popen(
-            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-        SSH_FORWARD_PROC[0] = proc
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        FORWARD_PROC[0] = proc
         time.sleep(2)
         if proc.poll() is None:
-            ok(f"Forwarding: localhost:{DEFAULT_PORT} → {host}:{DEFAULT_PORT}")
-            ok(f"            localhost:{DEFAULT_FRONTEND_PORT} → {host}:{DEFAULT_FRONTEND_PORT}")
+            ok(f"Tunnel: localhost:{BACKEND_PORT}  ↔  {host}:{BACKEND_PORT}")
+            ok(f"        localhost:{FRONTEND_PORT}  ↔  {host}:{FRONTEND_PORT}")
             return True
-        else:
-            fail(f"Forwarding fallito (exit code {proc.returncode})")
-            return False
+        fail(f"Tunnel SSH fallito (exit {proc.returncode})")
+        return False
     except FileNotFoundError:
         fail("ssh non trovato — installalo con 'brew install openssh'")
         return False
 
 
-def stop_port_forwarding():
-    """Ferma il port forwarding."""
-    proc = SSH_FORWARD_PROC[0]
-    if proc and proc.poll() is None:
-        proc.terminate()
+def stop_tunnel():
+    p = FORWARD_PROC[0]
+    if p and p.poll() is None:
+        p.terminate()
         try:
-            proc.wait(timeout=3)
+            p.wait(timeout=3)
         except subprocess.TimeoutExpired:
-            proc.kill()
-        SSH_FORWARD_PROC[0] = None
+            p.kill()
+    FORWARD_PROC[0] = None
 
 
-# ─── Browser ───────────────────────────────────────────────────
+# ─── Browser ──────────────────────────────────────────────────
 
 def open_browser():
-    """Apre il browser sul frontend."""
-    url = f"http://localhost:{DEFAULT_FRONTEND_PORT}"
-    info(f"Apertura browser: {url}")
+    url = f"http://localhost:{FRONTEND_PORT}"
+    info(f"Apro browser: {url}")
     try:
         webbrowser.open(url)
         ok("Browser aperto")
-    except Exception as e:
-        warn(f"Browser: {e}")
-        print(f"  Apri manualmente: {C.CYAN}{url}{C.RESET}")
+    except Exception:
+        warn("Apri manualmente il browser su " + url)
 
 
-# ─── Local mode ────────────────────────────────────────────────
+# ─── Modalità locale ──────────────────────────────────────────
 
-def check_local():
-    """Verifica e avvia tutto in locale (senza SSH)."""
-    info("Modalità locale")
-
-    def get(url):
+def run_local():
+    def _get(url):
         try:
             r = urllib.request.urlopen(url, timeout=3)
             return r.status == 200, r.read().decode()
         except Exception:
             return False, ""
 
-    ollama_ok, _ = get("http://localhost:11434/api/tags")
-    if ollama_ok:
-        ok("Ollama: attivo")
-    else:
-        warn("Ollama non raggiungibile — avvialo con 'ollama serve'")
+    ollama_ok, _ = _get("http://localhost:11434/api/tags")
+    ok("Ollama: attivo") if ollama_ok else warn("Ollama non raggiungibile")
 
-    backend_ok, data = get("http://localhost:8000/api/health")
-    if backend_ok:
-        ok("Backend: attivo")
-    else:
+    be_ok, data = _get(f"http://localhost:{BACKEND_PORT}/api/health")
+    if not be_ok:
         info("Avvio backend...")
         subprocess.Popen(
-            ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"],
+            ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", str(BACKEND_PORT)],
             cwd=os.path.join(os.path.dirname(__file__), "backend"),
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         time.sleep(3)
-        backend_ok, _ = get("http://localhost:8000/api/health")
-        ok("Backend avviato" if backend_ok else "Backend: errore avvio")
+        be_ok, data = _get(f"http://localhost:{BACKEND_PORT}/api/health")
+    ok("Backend: attivo") if be_ok else warn("Backend: errore")
 
-    frontend_ok = False
-    frontend_dir = os.path.join(os.path.dirname(__file__), "frontend")
-    if os.path.isdir(frontend_dir):
-        frontend_ok = True
-        rc, out, _ = run(["sh", "-c", "ps aux | grep 'vite' | grep -v grep"],
-                         timeout=5, check=False)
-        if "vite" not in out:
-            info("Avvio frontend...")
-            subprocess.Popen(
-                ["npm", "run", "dev"],
-                cwd=frontend_dir,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            time.sleep(3)
-            ok("Frontend avviato")
-        else:
-            ok("Frontend: già attivo")
+    if os.path.isdir(os.path.join(os.path.dirname(__file__), "frontend")):
+        rc, out, _ = subprocess.run(
+            ["sh", "-c", "ps aux | grep 'vite' | grep -v grep"],
+            capture_output=True, text=True, timeout=5
+        ).stdout.strip() if False else (None, "", "")
+        info("Frontend pronto")
+        subprocess.Popen(
+            ["npm", "run", "dev"],
+            cwd=os.path.join(os.path.dirname(__file__), "frontend"),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        time.sleep(3)
+        ok("Frontend avviato")
 
-    return backend_ok or frontend_ok
+    open_browser()
+    print(f"\n  {C.DIM}Premi Ctrl+C per fermare{C.RESET}")
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print()
 
 
-# ─── Main ──────────────────────────────────────────────────────
+# ─── Main ─────────────────────────────────────────────────────
 
 def main():
     global DEFAULT_USER
+
     parser = argparse.ArgumentParser(
         description="SMOT-KNOWLEDGE — Remote Launcher",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Esempi:
-  python3 smot.py                   ← auto-detect host + avvia tutto
-  python3 smot.py --host 192.168.1.100
-  python3 smot.py --local            ← tutto sulla macchina corrente
-  python3 smot.py --status           ← solo verifica stato remoto
-        """
-    )
-    parser.add_argument("--host", help="IP del server Linux")
-    parser.add_argument("--local", action="store_true", help="Modalità locale (senza SSH)")
+        epilog="""Esempi:
+  python3 smot.py --host 192.168.1.100    ← tunnel Cat 7 al server
+  python3 smot.py --host 192.168.1.100 --status
+  python3 smot.py --local                 ← tutto in locale""")
+    parser.add_argument("--host", help="IP del server Linux (rete locale via Cat 7)")
+    parser.add_argument("--local", action="store_true", help="Esecuzione locale")
     parser.add_argument("--status", action="store_true", help="Solo verifica stato")
     parser.add_argument("--user", default="", help=f"Utente SSH (default: {DEFAULT_USER})")
     args = parser.parse_args()
@@ -365,74 +252,70 @@ Esempi:
     if args.user:
         DEFAULT_USER = args.user
 
-    banner()
+    # ── Verifica host IMMEDIATA ──
+    host = args.host
+    if not args.local and not host:
+        fail("Specifica l'IP del server: python3 smot.py --host <IP>")
+        sys.exit(1)
+
+    if not args.local:
+        print(f"\n  Verifica tunnel SSH verso {host}...", end=" ", flush=True)
+        if not verify_ssh(host):
+            sys.exit(1)
+
+    # ── Banner ──
+    print(f"\n{C.BOLD}{C.CYAN}  ⚡ SMOT-KNOWLEDGE{C.RESET}")
+    print(f"  {C.DIM}{'─' * 40}{C.RESET}\n")
 
     # ── Modalità locale ──
     if args.local:
-        check_local()
-        open_browser()
-        print(f"\n  {C.DIM}Premi Ctrl+C per fermare{C.RESET}")
-        try:
-            signal.pause()
-        except KeyboardInterrupt:
-            print()
+        run_local()
         return
-
-    # ── Trova host ──
-    host = args.host or DEFAULT_HOST or find_host()
-    if not host:
-        fail("Nessun host trovato. Specifica: python3 smot.py --host <IP>")
-        sys.exit(1)
-
-    if host != DEFAULT_HOST:
-        ok(f"Host: {host}")
 
     # ── Solo status ──
     if args.status:
-        connected, status = check_remote(host)
-        if not connected:
-            sys.exit(1)
+        st = remote_status(host)
         print(f"\n  {C.BOLD}Riepilogo{C.RESET}")
-        for k, v in status.items():
-            if k != "host":
-                print(f"  {'  ' if v else f'{C.RED}✗{C.RESET}'} {k}: {v}")
+        for k, v in st.items():
+            if k == "host":
+                continue
+            mark = f"{C.GREEN}✓{C.RESET}" if v else f"{C.RED}✗{C.RESET}"
+            val = v if isinstance(v, str) else ("attivo" if v else "spento")
+            print(f"  {mark} {k}: {val}")
         return
 
     # ── Full start ──
-    connected, status = check_remote(host)
+    st = remote_status(host)
 
-    if not connected:
-        sys.exit(1)
-
-    if not (status.get("backend") and status.get("frontend")):
+    if not (st.get("backend") and st.get("frontend")):
         start_services(host)
         time.sleep(2)
-        _, status = check_remote(host)
+        st = remote_status(host)
 
-    if not start_port_forwarding(host):
-        warn("Port forwarding fallito — assicurati che le porte 8000 e 5173 siano libere")
+    if not start_tunnel(host):
+        fail("Tunnel SSH non riuscito — verifica che le porte siano libere")
         sys.exit(1)
 
     open_browser()
 
-    print(f"\n  {C.BOLD}⚡ SMOT-KNOWLEDGE attivo!{C.RESET}")
-    print(f"  {C.DIM}Chat:   {C.CYAN}http://localhost:{DEFAULT_FRONTEND_PORT}{C.RESET}")
-    print(f"  {C.DIM}API:    {C.CYAN}http://localhost:{DEFAULT_PORT}/api/health{C.RESET}")
-    print(f"  {C.DIM}Premi Ctrl+C per terminare tutto{C.RESET}\n")
+    model = st.get("model", "gemma3:4b")
+    print(f"\n  {C.BOLD}⚡ SMOT-KNOWLEDGE attivo{C.RESET}")
+    print(f"  {C.DIM}Modello:{C.RESET} {model}")
+    print(f"  {C.DIM}Chat:   {C.CYAN}http://localhost:{FRONTEND_PORT}{C.RESET}")
+    print(f"  {C.DIM}API:    {C.CYAN}http://localhost:{BACKEND_PORT}/api/health{C.RESET}")
+    print(f"  {C.DIM}Premi Ctrl+C per fermare tutto{C.RESET}\n")
 
-    # Tieni in esecuzione
     try:
         while True:
             time.sleep(1)
-            if SSH_FORWARD_PROC[0] and SSH_FORWARD_PROC[0].poll() is not None:
-                fail("Port forwarding perso — riconnessione...")
+            if FORWARD_PROC[0] and FORWARD_PROC[0].poll() is not None:
+                fail("Tunnel perso — riconnessione...")
                 break
     except KeyboardInterrupt:
         print()
-        info("Arresto...")
 
-    stop_port_forwarding()
-    ok("Fermo. ⚡ SMOT-KNOWLEDGE")
+    stop_tunnel()
+    ok("Fermo.")
 
 
 if __name__ == "__main__":
