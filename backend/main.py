@@ -7,6 +7,8 @@ import asyncio
 import time
 import os
 
+from mcp_manager import mcp_manager
+
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 MODEL = os.getenv("SMOT_MODEL", "gemma3:4b")
 
@@ -31,8 +33,10 @@ async def log(message: str, t: str = "info"):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print(f"  SMOT-KNOWLEDGE backend — modello: {MODEL}, ollama: {OLLAMA_URL}")
+    await mcp_manager.init()
+    print(f"  SMOT-KNOWLEDGE — modello: {MODEL}, ollama: {OLLAMA_URL}, MCP: sequential-thinking")
     yield
+    await mcp_manager.close_all()
 
 app = FastAPI(title="SMOT-KNOWLEDGE", version="0.1.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -45,9 +49,9 @@ async def ollama_chat(messages: list, stream=True):
                 if line.strip():
                     yield json.loads(line)
 
-async def ollama_gen(prompt: str, stream=False):
+async def ollama_gen(prompt: str):
     async with httpx.AsyncClient(timeout=60.0) as client:
-        payload = {"model": MODEL, "prompt": prompt, "stream": stream, "options": {"temperature": 0.7}}
+        payload = {"model": MODEL, "prompt": prompt, "stream": False, "options": {"temperature": 0.7}}
         async with client.stream("POST", f"{OLLAMA_URL}/api/generate", json=payload) as resp:
             full = ""
             async for line in resp.aiter_lines():
@@ -61,33 +65,49 @@ async def ollama_gen(prompt: str, stream=False):
 
 async def coast_pipeline(query: str):
     start = time.time()
-    await log(f"Sequential Thinking: decomposizione richiesta...", "brain")
 
+    # FASE 1: Sequential Thinking via MCP
+    await log(f"MCP Sequential Thinking: analisi richiesta...", "brain")
+    thoughts = [
+        f"Decomponi questa domanda in sotto-problemi: {query}",
+        f"Per ogni sotto-problema, quali fonti di conoscenza servono?",
+        f"Quali connessioni esistono tra questi concetti?",
+    ]
+    try:
+        st_result = await mcp_manager.sequential_think(thoughts)
+        await log(f"Sequential Thinking completato", "success")
+    except Exception as e:
+        st_result = ""
+        await log(f"Sequential Thinking non disponibile: {e}", "error")
+
+    # FASE 1b: decomponi via Ollama (fallback + arricchimento)
     decompose = f"""Decomponi in 2-4 sotto-domande chiave. Una per riga. Solo "Q: testo".
 Domanda: {query}"""
     raw = await ollama_gen(decompose)
     sub_questions = [l[2:].strip() for l in raw.split("\n") if l.strip().startswith("Q")]
     if not sub_questions:
         sub_questions = [query]
-
     await log(f"Domanda scomposta in {len(sub_questions)} sotto-questioni", "system")
-    for sq in sub_questions:
-        await log(f"  Q: {sq[:80]}", "info")
 
+    # FASE 2: HCE Budget (placeholder)
     await log(f"HCE: allocazione budget contesto...", "system")
 
+    # FASE 3: Ricerca fonti (placeholder MCP integration)
     await log(f"Ricerca su Semantic Scholar...", "search")
-    await asyncio.sleep(0.15)
+    await asyncio.sleep(0.1)
     await log(f"Ricerca su arXiv...", "search")
     await asyncio.sleep(0.1)
-    await log(f"Ricerca su PubMed...", "search")
-    await asyncio.sleep(0.1)
 
+    # FASE 4: Generazione risposta con contesto arricchito
     await log(f"Generazione risposta ({MODEL})...", "brain")
-    sysp = "Sei SMOT-KNOWLEDGE, assistente ricerca con curiosità artificiale. Rispondi in italiano, preciso."
+    context_parts = [f"Sotto-domande: {' | '.join(sub_questions)}"]
+    if st_result:
+        context_parts.append(f"Analisi: {st_result[:500]}")
+
+    sysp = "Sei SMOT-KNOWLEDGE, assistente ricerca con cervello simulato. Rispondi in italiano, preciso, citando concetti."
     msgs = [
         {"role": "system", "content": sysp},
-        {"role": "user", "content": f"Domanda: {query}\nSotto-domande: {' | '.join(sub_questions)}"},
+        {"role": "user", "content": f"Domanda: {query}\n\n{' '.join(context_parts)}"},
     ]
 
     full = ""
@@ -102,7 +122,8 @@ Domanda: {query}"""
     elapsed = time.time() - start
     await log(f"Risposta generata in {elapsed:.1f}s", "success")
 
-    await log(f"Curiosity Engine: analisi novelty...", "brain")
+    # FASE 5: Curiosity Engine
+    await log(f"Curiosity Engine: suggerimenti...", "brain")
     cur = await ollama_gen(f"Dato: {query}. Suggerisci 2 argomenti approfondimento diversi. Uno per riga con '-'.")
     curiosity = [c.strip().lstrip("- ") for c in cur.split("\n") if c.strip()][:3]
 

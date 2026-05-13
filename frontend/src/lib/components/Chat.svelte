@@ -1,37 +1,18 @@
-<script>
-  import { messages, isThinking, streamingContent, sendMessage, clearChat, settings, sources } from '../stores/app.js'
-  import Message from './Message.svelte'
+<script lang="ts">
+  import { messages, isThinking, streamingContent, sendMessage, clearChat, settings } from '../stores/app.js'
+  import type { Message as MsgType } from '../stores/app.js'
+  import ChatMessage from './Message.svelte'
   import InputBar from './InputBar.svelte'
 
-  let chatContainer = $state(null)
-  let useNewMsg = $state(0)
+  let chatContainer: HTMLDivElement | undefined = $state()
+  let msgCount = $state(0)
 
-  $effect(() => {
-    const count = useNewMsg
-    if (count && chatContainer) {
-      requestAnimationFrame(() => {
-        chatContainer.scrollTop = chatContainer.scrollHeight
-      })
-    }
-  })
+  $effect(() => { msgCount = $messages.length })
+  $effect(() => { if (msgCount && chatContainer) requestAnimationFrame(() => chatContainer!.scrollTop = chatContainer!.scrollHeight) })
+  $effect(() => { if ($streamingContent && chatContainer) requestAnimationFrame(() => chatContainer!.scrollTop = chatContainer!.scrollHeight) })
 
-  $effect(() => {
-    const val = $messages
-    useNewMsg++
-  })
-
-  $effect(() => {
-    const val = $streamingContent
-    if (val && chatContainer) {
-      requestAnimationFrame(() => {
-        chatContainer.scrollTop = chatContainer.scrollHeight
-      })
-    }
-  })
-
-  function handleSend(text) {
-    const userMsg = { role: 'user', content: text, id: crypto.randomUUID() }
-    messages.update(m => [...m, userMsg])
+  function handleSend(text: string) {
+    messages.update(m => [...m, { role: 'user', content: text, id: crypto.randomUUID() }])
     sendMessage(text)
   }
 </script>
@@ -49,36 +30,20 @@
           <span class="w-2 h-2 rounded-full {$settings.wsConnected ? 'bg-accent-emerald' : 'bg-red-400'}"
                 class:animate-pulse-glow={!$settings.wsConnected}></span>
           {$settings.wsConnected ? 'Backend connesso' : 'Backend disconnesso'}
-          <span class="text-brain-600">|</span>
-          Modello: {$settings.model}
+          <span class="text-brain-600">|</span> Modello: {$settings.model}
         </div>
         <div class="grid grid-cols-2 gap-2 max-w-sm mt-4 w-full px-4">
-          {#each [
-            'Spiegami l\'attention nei transformer',
-            'Cosa sono i modelli MoE?',
-            'Differenza tra RAG e fine-tuning',
-            'Come funziona il RLHF?',
-          ] as suggestion}
-            <button
-              onclick={() => handleSend(suggestion)}
-              class="text-xs text-left px-3 py-2 rounded-lg border border-brain-600/50
-                hover:border-accent-cyan/30 hover:text-accent-cyan
-                transition-all duration-200 bg-brain-800/50"
-            >
-              {suggestion}
-            </button>
+          {#each ['Spiegami l\'attention nei transformer', 'Cosa sono i modelli MoE?', 'Differenza tra RAG e fine-tuning', 'Come funziona il RLHF?'] as suggestion}
+            <button onclick={() => handleSend(suggestion)}
+              class="text-xs text-left px-3 py-2 rounded-lg border border-brain-600/50 hover:border-accent-cyan/30 hover:text-accent-cyan transition-all duration-200 bg-brain-800/50"
+            >{suggestion}</button>
           {/each}
         </div>
-        <button onclick={clearChat}
-          class="text-[11px] text-brain-500 hover:text-brain-300 transition-colors">
-          cancella cronologia
-        </button>
+        <button onclick={clearChat} class="text-[11px] text-brain-500 hover:text-brain-300 transition-colors">cancella cronologia</button>
       </div>
     {:else}
       {#each $messages as msg (msg.id)}
-        <div class="message-enter">
-          <Message {msg} />
-        </div>
+        <div class="message-enter"><ChatMessage {msg} /></div>
       {/each}
     {/if}
 

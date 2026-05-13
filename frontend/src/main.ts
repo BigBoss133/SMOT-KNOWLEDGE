@@ -5,7 +5,8 @@ import { connectWebSocket, loadChatHistory, saveChatHistory } from './lib/stores
 
 connectWebSocket()
 loadChatHistory()
-const unsub = saveChatHistory()
+saveChatHistory()
 
-const app = mount(App, { target: document.getElementById('app') })
+const app = mount(App, { target: document.getElementById('app')! })
+
 export default app

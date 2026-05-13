@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
   import { view, isThinking, settings, brainStats } from './lib/stores/app.js'
   import Chat from './lib/components/Chat.svelte'
   import BrainView from './lib/components/BrainView.svelte'
@@ -9,24 +9,17 @@
   let showTerminal = $state(false)
   let clock = $state(new Date().toLocaleTimeString())
 
-  function toggleTerminal() {
-    showTerminal = !showTerminal
-  }
+  function toggleTerminal() { showTerminal = !showTerminal }
 
   function fetchStats() {
-    fetch('http://localhost:8000/api/stats')
-      .then(r => r.json())
-      .then(d => brainStats.set(d))
-      .catch(() => {})
+    fetch('/api/stats').then(r => r.json()).then(d => brainStats.set(d)).catch(() => {})
   }
 
   $effect(() => {
-    const timer = setInterval(() => {
-      clock = new Date().toLocaleTimeString()
-    }, 1000)
+    const t = setInterval(() => clock = new Date().toLocaleTimeString(), 1000)
     fetchStats()
-    const statsTimer = setInterval(fetchStats, 10000)
-    return () => { clearInterval(timer); clearInterval(statsTimer) }
+    const si = setInterval(fetchStats, 10000)
+    return () => { clearInterval(t); clearInterval(si) }
   })
 </script>
 
@@ -49,30 +42,20 @@
     </div>
     <div class="flex items-center gap-3">
       <span class="text-[10px] text-brain-500 font-mono">{clock}</span>
-      <button
-        onclick={toggleTerminal}
+      <button onclick={toggleTerminal}
         class="text-xs text-brain-400 hover:text-brain-200 transition-colors px-2 py-1 rounded hover:bg-brain-700/50"
-      >
-        {showTerminal ? '⊟ Terminale' : '⊞ Terminale'}
-      </button>
+      >{showTerminal ? '⊟ Terminale' : '⊞ Terminale'}</button>
     </div>
   </header>
 
   <main class="flex-1 overflow-hidden relative">
-    {#if $view === 'chat'}
-      <Chat />
-    {:else if $view === 'brain'}
-      <BrainView />
-    {:else if $view === 'sources'}
-      <SourcesPanel />
-    {:else if $view === 'settings'}
-      <SettingsPanel />
-    {/if}
+    {#if $view === 'chat'}<Chat />
+    {:else if $view === 'brain'}<BrainView />
+    {:else if $view === 'sources'}<SourcesPanel />
+    {:else if $view === 'settings'}<SettingsPanel />{/if}
   </main>
 
-  {#if showTerminal}
-    <TerminalPanel />
-  {/if}
+  {#if showTerminal}<TerminalPanel />{/if}
 
   <nav class="flex items-center justify-around px-4 py-2 border-t border-brain-700/50 bg-brain-800/50 shrink-0">
     {#each [
@@ -81,12 +64,9 @@
       { id: 'sources', icon: '📚', label: 'Fonti' },
       { id: 'settings', icon: '⚙️', label: 'Impostazioni' },
     ] as tab}
-      <button
-        onclick={() => view.set(tab.id)}
+      <button onclick={() => view.set(tab.id)}
         class="flex flex-col items-center gap-0.5 px-4 py-1 rounded-lg transition-all duration-200
-          {$view === tab.id
-            ? 'text-accent-cyan bg-accent-cyan/10'
-            : 'text-brain-400 hover:text-brain-200 hover:bg-brain-700/30'}"
+          {$view === tab.id ? 'text-accent-cyan bg-accent-cyan/10' : 'text-brain-400 hover:text-brain-200 hover:bg-brain-700/30'}"
       >
         <span class="text-lg leading-none">{tab.icon}</span>
         <span class="text-[10px] font-medium">{tab.label}</span>

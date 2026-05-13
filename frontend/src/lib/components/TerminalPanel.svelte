@@ -1,33 +1,17 @@
-<script>
+<script lang="ts">
   import { terminalLogs } from '../stores/app.js'
 
   let isPaused = $state(false)
-  let terminalEl = $state(null)
+  let terminalEl: HTMLDivElement | undefined = $state()
 
-  $effect(() => {
-    if (!isPaused && terminalEl) {
-      requestAnimationFrame(() => {
-        terminalEl.scrollTop = terminalEl.scrollHeight
-      })
-    }
-  })
+  $effect(() => { if (!isPaused && terminalEl) requestAnimationFrame(() => terminalEl!.scrollTop = terminalEl!.scrollHeight) })
 
-  const typeColors = {
-    brain: 'text-accent-cyan',
-    search: 'text-accent-purple',
-    system: 'text-brain-400',
-    success: 'text-accent-emerald',
-    error: 'text-red-400',
-    info: 'text-brain-300',
+  const typeColors: Record<string, string> = {
+    brain: 'text-accent-cyan', search: 'text-accent-purple', system: 'text-brain-400',
+    success: 'text-accent-emerald', error: 'text-red-400', info: 'text-brain-300',
   }
-
-  const typeIcons = {
-    brain: '  ',
-    search: '  ',
-    system: '  ',
-    success: ' ✅',
-    error: ' ❌',
-    info: ' ℹ️',
+  const typeIcons: Record<string, string> = {
+    brain: '  ', search: '  ', system: '  ', success: ' ✅', error: ' ❌', info: ' ℹ️',
   }
 </script>
 
@@ -37,15 +21,10 @@
       <span class="text-xs font-semibold text-brain-300 font-mono">▶ Terminale</span>
       <span class="text-[10px] text-brain-500 font-mono">{$terminalLogs.length} linee</span>
     </div>
-    <button
-      onclick={() => isPaused = !isPaused}
-      class="text-[10px] px-2 py-0.5 rounded font-mono transition-colors
-        {isPaused ? 'text-accent-orange bg-accent-orange/10' : 'text-brain-400 hover:text-brain-200'}"
-    >
-      {isPaused ? '  Riprendi' : '  Pausa'}
-    </button>
+    <button onclick={() => isPaused = !isPaused}
+      class="text-[10px] px-2 py-0.5 rounded font-mono transition-colors {isPaused ? 'text-accent-orange bg-accent-orange/10' : 'text-brain-400 hover:text-brain-200'}"
+    >{isPaused ? '  Riprendi' : '  Pausa'}</button>
   </div>
-
   <div bind:this={terminalEl} class="h-40 overflow-y-auto px-4 py-2 space-y-0.5 font-mono text-[12px] leading-5">
     {#if $terminalLogs.length === 0}
       <div class="text-brain-600 italic">In attesa di attività...</div>
