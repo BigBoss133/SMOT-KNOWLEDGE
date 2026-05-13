@@ -73,12 +73,13 @@ def start_backend(host, port):
     fail(f"Backend non parte:\n{out}")
     return False
 
-def start_frontend(host):
+def start_frontend(host, be_port=None):
     info("Avvio frontend...")
-    ssh(host, f"cd {REMOTE_DIR}/frontend && nohup npm run dev > /tmp/smot-frontend.log 2>&1 < /dev/null &", timeout=10)
+    env = f"SMOT_BACKEND_PORT={be_port}" if be_port else ""
+    ssh(host, f"cd {REMOTE_DIR}/frontend && {env} nohup npm run dev > /tmp/smot-frontend.log 2>&1 < /dev/null &", timeout=10)
     for _ in range(8):
         time.sleep(2)
-        if remote_check(host, DEFAULT_PORT)["frontend"]:
+        if remote_check(host, be_port or DEFAULT_PORT)["frontend"]:
             ok("Frontend avviato")
             return True
     rc, out, _ = ssh(host, "tail -30 /tmp/smot-frontend.log")
@@ -161,7 +162,7 @@ def main():
         ok("frontend: attivo")
     else:
         warn("frontend: non attivo")
-        start_frontend(args.host)
+        start_frontend(args.host, be_port)
 
     if args.status:
         return
